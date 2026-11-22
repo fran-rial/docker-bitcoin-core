@@ -12,6 +12,10 @@ and signature policy still require independent review. The Alpine image tag
 and package repositories are not digest- or snapshot-pinned; reproducibility
 and dependency provenance also remain open.
 
+The build workflow tests this candidate on pull requests only. It does not
+publish `32.1-alpine` or move the floating `alpine` tag; enabling releases
+requires the checks below and a separate review of the workflow's tag policy.
+
 ## Isolated build and smoke checks
 
 On a Docker-capable Linux or WSL host, from the repository root:

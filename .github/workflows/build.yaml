@@ -18,6 +18,7 @@ jobs:
       matrix:
         version:
           - '32'
+          - '32/alpine'
           - '28'
           - '28/alpine'
           - '24'
@@ -45,6 +46,10 @@ jobs:
           function version { echo "$@" | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }'; }
 
           BITCOIN_VERSION=${{matrix.version}}
+          if [[ "$BITCOIN_VERSION" == "32/alpine" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            echo "Skipping unpublished Alpine candidate outside pull requests"
+            exit 0
+          fi
           LATEST_BITCOIN_MAJOR_VERSION=$(find . -type d -maxdepth 1 -not -path '*/\.*' | sort -n | tail -n 1 | cut -c 3-)
           PLATFORMS="linux/amd64"
           PUSH=false
@@ -100,8 +105,7 @@ jobs:
           echo ::set-output name=tags::${TAGS[@]}
           echo ::set-output name=build::true
 
-      # Pull requests from forks have no access to secrets, so they build without logging in.
-      - if: steps.prepare.outputs.build == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      - if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true'
         name: Login into Docker Hub
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
