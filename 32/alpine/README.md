@@ -1,10 +1,13 @@
 # Bitcoin Core 32.1 Alpine candidate
 
 This is an unvalidated source-build candidate, not a published image.
-It preserves the Alpine image's UID/GID defaults and entrypoint conventions,
-including recursive ownership changes. Do not mount existing node or wallet
-data: build, runtime, wallet migration, rollback and Synology compatibility
-have not yet been verified.
+It defaults to UID 100 and GID 101 and starts as the non-root `bitcoin` user.
+The entrypoint does not change ownership or apply runtime UID/GID overrides;
+mounted data directories must already be accessible and owned by the user
+running the container so their permissions can be set to `0700`. Startup
+fails if the data directory cannot be created or its permissions cannot be
+set. Do not mount existing node or wallet data: build, runtime, wallet
+migration, rollback and Synology compatibility have not yet been verified.
 
 The source archive is checked against Bitcoin Core's signed SHA256SUMS using
 a pinned snapshot of the upstream builder keys. The signer-key provenance
@@ -23,9 +26,13 @@ releases requires the checks below and a separate review of the tag policy.
 The Dockerfile imports builder keys from a
 [pinned `guix.sigs` commit](https://github.com/bitcoin-core/guix.sigs/tree/93aacee89333de43a96e7d128baa84e737c41b0b/builder-keys).
 It requires a successful GPG verification, rejects signature-error statuses,
-requires at least five distinct primary `VALIDSIG` fingerprints, and checks
-the source archive against the signed SHA256SUMS. This snapshot pin does not
-independently authenticate the builders or approve a signer trust policy.
+and checks the source archive against the signed SHA256SUMS. With the default
+empty `TRUSTED_BUILDER_FPRS`, it requires at least five distinct primary
+`VALIDSIG` fingerprints. The alternative non-empty trusted-list branch is
+unsafe: repeated entries for one fingerprint can satisfy its three-signer
+threshold. Do not use that branch until it counts distinct trusted signers.
+The snapshot pin does not independently authenticate the builders or approve
+a signer trust policy.
 
 For comparison, the [NixOS Bitcoin package](https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/bi/bitcoin/package.nix)
 checks specific fingerprints and pins hashes of its inputs.

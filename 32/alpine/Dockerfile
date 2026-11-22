@@ -1,4 +1,15 @@
-FROM alpine:3.24.4 AS builder
+# syntax=docker/dockerfile:1.7
+
+ARG ALPINE_VERSION=3.24.4
+ARG BITCOIN_VERSION=32.1
+ARG BITCOIN_PREFIX=/opt/bitcoin-32.1
+ARG GUIX_SIGS_COMMIT=93aacee89333de43a96e7d128baa84e737c41b0b
+
+FROM alpine:${ALPINE_VERSION} AS builder
+
+ARG BITCOIN_VERSION
+ARG BITCOIN_PREFIX
+ARG GUIX_SIGS_COMMIT
 
 RUN apk add --no-cache \
   boost-dev \
@@ -13,33 +24,44 @@ RUN apk add --no-cache \
   sqlite-dev \
   zeromq-dev
 
-ENV BITCOIN_VERSION=32.1
-ENV BITCOIN_PREFIX=/opt/bitcoin-32.1
-
 WORKDIR /build
 
-# Pin the upstream builder-key snapshot rather than following a moving branch.
-ENV GUIX_SIGS_COMMIT=93aacee89333de43a96e7d128baa84e737c41b0b
-RUN set -eux; \
+# Replace with space/newline-separated primary key fingerprints of trusted builders
+ENV TRUSTED_BUILDER_FPRS=""
+
+RUN set -eu; \
+  GNUPGHOME="$(mktemp -d)"; \
+  export GNUPGHOME; \
   curl -fsSLo keys.tar.gz "https://github.com/bitcoin-core/guix.sigs/archive/${GUIX_SIGS_COMMIT}.tar.gz"; \
-  tar -xzf keys.tar.gz; \
-  gpg --batch --import "guix.sigs-${GUIX_SIGS_COMMIT}"/builder-keys/*.gpg; \
+  tar -xzf keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}/builder-keys"; \
+  gpg --batch --import "guix.sigs-${GUIX_SIGS_COMMIT}/builder-keys"/*.gpg; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/SHA256SUMS"; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/SHA256SUMS.asc"; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}.tar.gz"; \
   gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS > SHA256SUMS.status; \
-  if grep -E '^\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYREVOKED|SIGEXPIRED)( |$)' SHA256SUMS.status >&2; then \
-    echo "Release signature verification rejected the status above" >&2; exit 1; \
-  else \
-    status="$?"; \
-    if [ "$status" -ne 1 ]; then exit "$status"; fi; \
+  if grep -Eq '^\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYREVOKED|SIGEXPIRED)( |$)' SHA256SUMS.status; then \
+    echo "Rejected invalid or expired GPG signature status" >&2; \
+    exit 1; \
   fi; \
-  valid_signers="$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $12 ? $12 : $3 }' SHA256SUMS.status | sort -u | wc -l)"; \
-  test "$valid_signers" -ge 5; \
-  grep " bitcoin-${BITCOIN_VERSION}.tar.gz\$" SHA256SUMS | sha256sum -c -; \
-  tar -xzf "bitcoin-${BITCOIN_VERSION}.tar.gz"
+  valid_fprs="$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print toupper($12 ? $12 : $3) }' SHA256SUMS.status | sort -u)"; \
+  if [ -n "${TRUSTED_BUILDER_FPRS}" ]; then \
+    matched_count=0; \
+    for fpr in ${TRUSTED_BUILDER_FPRS}; do \
+      norm_fpr="$(printf '%s' "$fpr" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"; \
+      if printf '%s\n' "$valid_fprs" | grep -qx "$norm_fpr"; then \
+        matched_count=$((matched_count + 1)); \
+      fi; \
+    done; \
+    test "$matched_count" -ge 3; \
+  else \
+    valid_signers="$(printf '%s\n' "$valid_fprs" | sed '/^$/d' | wc -l)"; \
+    test "$valid_signers" -ge 5; \
+  fi; \
+  grep -E "  bitcoin-${BITCOIN_VERSION}\.tar\.gz$" SHA256SUMS | sha256sum -c -; \
+  tar -xzf "bitcoin-${BITCOIN_VERSION}.tar.gz"; \
+  rm -rf "$GNUPGHOME" keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}" SHA256SUMS SHA256SUMS.asc SHA256SUMS.status "bitcoin-${BITCOIN_VERSION}.tar.gz"
 
-WORKDIR /build/bitcoin-32.1
+WORKDIR /build/bitcoin-${BITCOIN_VERSION}
 
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
@@ -51,29 +73,39 @@ RUN cmake -B build \
     -DENABLE_WALLET=ON \
     -DWITH_ZMQ=ON \
     -DINSTALL_MAN=OFF \
-  && cmake --build build --parallel 2 \
-  && cmake --install build
+  && cmake --build build --parallel "$(nproc)" \
+  && cmake --install build \
+  && rm -rf /build/bitcoin-${BITCOIN_VERSION}
 
-FROM alpine:3.24.4
+
+FROM alpine:${ALPINE_VERSION}
 
 ARG UID=100
 ARG GID=101
+ARG BITCOIN_VERSION
+ARG BITCOIN_PREFIX
+
+ENV BITCOIN_DATA=/home/bitcoin/.bitcoin \
+    BITCOIN_VERSION=${BITCOIN_VERSION} \
+    PATH=${BITCOIN_PREFIX}/bin:${PATH}
 
 RUN addgroup -g "${GID}" -S bitcoin \
   && adduser -u "${UID}" -S -G bitcoin bitcoin \
-  && apk add --no-cache libstdc++ shadow sqlite-libs su-exec zeromq
+  && apk add --no-cache libstdc++ sqlite-libs su-exec zeromq \
+  && mkdir -p "${BITCOIN_DATA}" \
+  && chown -R bitcoin:bitcoin /home/bitcoin
 
-ENV BITCOIN_DATA=/home/bitcoin/.bitcoin
-ENV BITCOIN_VERSION=32.1
-ENV PATH=/opt/bitcoin-32.1/bin:$PATH
+COPY --from=builder --chown=root:root "${BITCOIN_PREFIX}" "${BITCOIN_PREFIX}"
+COPY --chown=root:root docker-entrypoint.sh /entrypoint.sh
+RUN chmod 0755 /entrypoint.sh
 
-COPY --from=builder /opt/bitcoin-32.1 /opt/bitcoin-32.1
-COPY docker-entrypoint.sh /entrypoint.sh
-
-VOLUME ["/home/bitcoin/.bitcoin"]
+VOLUME ["${BITCOIN_DATA}"]
 EXPOSE 8332 8333 18332 18333 18443 18444 38332 38333
 ENTRYPOINT ["/entrypoint.sh"]
 
-RUN bitcoind -version | grep "Bitcoin Core daemon version v${BITCOIN_VERSION}"
+USER bitcoin
+WORKDIR ${BITCOIN_DATA}
+
+RUN bitcoind -version | grep -q "Bitcoin Core daemon version v${BITCOIN_VERSION}"
 
 CMD ["bitcoind"]
