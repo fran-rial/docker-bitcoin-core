@@ -28,7 +28,7 @@ RUN set -eux; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/SHA256SUMS.asc"; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}.tar.gz"; \
   gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS > SHA256SUMS.status; \
-  if grep -E '^\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYREVOKED|KEYEXPIRED|SIGEXPIRED) ' SHA256SUMS.status >&2; then \
+  if grep -E '^\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYREVOKED|SIGEXPIRED)( |$)' SHA256SUMS.status >&2; then \
     echo "Release signature verification rejected the status above" >&2; exit 1; \
   else \
     status="$?"; \
