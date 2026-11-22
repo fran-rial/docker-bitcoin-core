@@ -94,7 +94,8 @@ jobs:
             fi
           fi
 
-          if [[ ${BITCOIN_VERSION} != *"alpine"* ]] && [ $(version ${BITCOIN_VERSION}) -ge $(version "0.19") ]; then
+          if [[ ${BITCOIN_VERSION} == "32/alpine" ]] || \
+             { [[ ${BITCOIN_VERSION} != *"alpine"* ]] && [ $(version ${BITCOIN_VERSION}) -ge $(version "0.19") ]; }; then
             PLATFORMS="linux/amd64,linux/arm/v7,linux/arm64"
           fi
 

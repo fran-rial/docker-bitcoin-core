@@ -12,9 +12,30 @@ and signature policy still require independent review. The Alpine image tag
 and package repositories are not digest- or snapshot-pinned; reproducibility
 and dependency provenance also remain open.
 
-The build workflow tests this candidate on pull requests only. It does not
-publish `32.1-alpine` or move the floating `alpine` tag; enabling releases
-requires the checks below and a separate review of the workflow's tag policy.
+The build workflow requests `linux/amd64`, `linux/arm64` and `linux/arm/v7`
+builds of this candidate on pull requests only. These targets are not yet
+qualified: each requires a successful build and runtime tests. The workflow
+does not publish `32.1-alpine` or move the floating `alpine` tag; enabling
+releases requires the checks below and a separate review of the tag policy.
+
+## Signature verification and comparison
+
+The Dockerfile imports builder keys from a
+[pinned `guix.sigs` commit](https://github.com/bitcoin-core/guix.sigs/tree/93aacee89333de43a96e7d128baa84e737c41b0b/builder-keys).
+It requires a successful GPG verification, rejects signature-error statuses,
+requires at least five distinct primary `VALIDSIG` fingerprints, and checks
+the source archive against the signed SHA256SUMS. This snapshot pin does not
+independently authenticate the builders or approve a signer trust policy.
+
+For comparison, the [NixOS Bitcoin package](https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/bi/bitcoin/package.nix)
+checks specific fingerprints and pins hashes of its inputs.
+[docker-bitcoind](https://github.com/kylemanna/docker-bitcoind/blob/master/Dockerfile)
+matches a signature against a configured fingerprint list after keyserver
+retrieval. [Core Lightning](https://github.com/ElementsProject/lightning/blob/master/Dockerfile)
+imports keys stored in its repository and checks signatures and checksums.
+These are different policies, not independent identity proofs for this image.
+The comparison reflects the sources inspected on 2026-11-22; their branches
+can change.
 
 ## Isolated build and smoke checks
 
@@ -32,6 +53,26 @@ use, test signature failures, runtime dependencies, isolated regtest RPC,
 block-filter scanning, persistence, shutdown, user IDs and synthetic wallet
 migration. Review CI tag behavior and test on the target DSM/kernel separately.
 Never use an existing production data directory for these tests.
+
+To check each target separately on a Docker Buildx host with native support or
+configured QEMU emulation, load one single-platform image at a time:
+
+```sh
+(
+  set -e
+  for platform in linux/amd64 linux/arm64 linux/arm/v7; do
+    docker buildx build --platform "$platform" --load \
+      -t bitcoin-core:32.1-alpine-candidate 32/alpine
+    for executable in bitcoind bitcoin-cli bitcoin-tx; do
+      docker run --rm --platform "$platform" --entrypoint "$executable" \
+        bitcoin-core:32.1-alpine-candidate -version
+    done
+  done
+)
+```
+
+Emulated builds can take substantially longer and need more resources.
+Passing these checks does not prove native hardware or Synology compatibility.
 
 ## GitHub CLI on macOS and WSL
 
