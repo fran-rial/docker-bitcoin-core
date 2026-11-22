@@ -4,30 +4,33 @@ on:
   push:
     branches:
       - master
+      - main
     tags:
-      - '*'
+      - "*"
   pull_request:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         version:
-          - '32'
-          - '32/alpine'
-          - '28'
-          - '28/alpine'
-          - '24'
-          - '24/alpine'
-          - '23'
-          - '23/alpine'
-          - '22'
-          - '22/alpine'
-      fail-fast: false
+          - "32"
+          - "32/alpine"
+          - "28"
+          - "28/alpine"
+          - "24"
+          - "24/alpine"
+          - "23"
+          - "23/alpine"
+          - "22"
+          - "22/alpine"
+
     steps:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -40,101 +43,232 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Prepare Docker build
+      - name: Prepare build metadata
         id: prepare
+        env:
+          MATRIX_VERSION: ${{ matrix.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          QUAY_NAMESPACE: ${{ secrets.QUAY_NAMESPACE }}
         run: |
-          function version { echo "$@" | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }'; }
+          set -euo pipefail
 
-          BITCOIN_VERSION=${{matrix.version}}
-          if [[ "$BITCOIN_VERSION" == "32/alpine" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
-            echo "Skipping unpublished Alpine candidate outside pull requests"
+          version_num() {
+            echo "$1" | awk -F. '{ printf("%d%03d%03d%03d\n", $1+0, $2+0, $3+0, $4+0); }'
+          }
+
+          if [ ! -d "${MATRIX_VERSION}" ]; then
+            echo "Directory ${MATRIX_VERSION}/ does not exist; skipping."
+            echo "build=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          LATEST_BITCOIN_MAJOR_VERSION=$(find . -type d -maxdepth 1 -not -path '*/\.*' | sort -n | tail -n 1 | cut -c 3-)
-          PLATFORMS="linux/amd64"
-          PUSH=false
-          REPO=ruimarinho/bitcoin-core
-          TAGS=()
 
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            TAG=${GITHUB_REF#refs/tags/}
-            PUSH=true
+          # Latest numeric major version among top-level numeric directories
+          latest_major="$(
+            find . -maxdepth 1 -mindepth 1 -type d -exec basename {} \; \
+              | grep -E '^[0-9]+$' \
+              | sort -n \
+              | tail -n 1 || true
+          )"
+          [ -n "${latest_major}" ] || latest_major="32"
 
-            if [[ ${BITCOIN_VERSION} == *"alpine"* ]]; then
-              TAGS+=("$REPO:$TAG-alpine")
+          platforms="linux/amd64"
+          if [[ "${MATRIX_VERSION}" == "32/alpine" ]] || \
+             { [[ "${MATRIX_VERSION}" != *"alpine"* ]] && [ "$(version_num "${MATRIX_VERSION}")" -ge "$(version_num "0.19")" ]; }; then
+            platforms="linux/amd64,linux/arm/v7,linux/arm64"
+          fi
+
+          push_enabled="false"
+          is_push_event="false"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            is_push_event="true"
+          fi
+
+          repo_slug="${GITHUB_REPOSITORY,,}"
+          repo_name="${repo_slug#*/}"
+          ghcr_repo="ghcr.io/${repo_slug}"
+
+          tag_suffixes=()
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            raw_tag="${GITHUB_REF#refs/tags/}"
+            push_enabled="true"
+
+            # Support both "<ver>-alpine" (e.g. "32.1-alpine") and "<ver>" (e.g. "32.1")
+            if [[ "${raw_tag}" == *-alpine ]]; then
+              clean_ver="${raw_tag%-alpine}"
+              if [[ "${MATRIX_VERSION}" != *"alpine"* ]]; then
+                echo "Skipping non-alpine matrix ${MATRIX_VERSION}/ for *-alpine tag ${raw_tag}"
+                echo "build=false" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+              target_major="${clean_ver%%.*}"
+              matrix_major="${MATRIX_VERSION%%/*}"
+              if [ "$(version_num "${target_major}")" -ne "$(version_num "${matrix_major}")" ]; then
+                echo "Skipping ${MATRIX_VERSION}/ for tag ${raw_tag}"
+                echo "build=false" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+              tag_suffixes+=("${raw_tag}")
             else
-              TAGS+=("$REPO:$TAG")
-            fi
-
-            if [ $(version ${TAG}) -ge $(version "22.0") ]; then
-              TAG_MAJOR_MINOR=$(echo $TAG | cut -c -2)
-            else
-              TAG_MAJOR_MINOR=$(echo $TAG | cut -c -4)
-            fi
-
-            if [ $(version ${TAG_MAJOR_MINOR}) -ne $(version ${BITCOIN_VERSION}) ]; then
-              echo "Skipping build of base image $BITCOIN_VERSION/ as ${TAG} is targeted at ${TAG_MAJOR_MINOR}/"
-              exit 0
+              clean_ver="${raw_tag}"
+              if [[ "${MATRIX_VERSION}" == *"alpine"* ]]; then
+                tag_suffixes+=("${clean_ver}-alpine")
+              else
+                tag_suffixes+=("${clean_ver}")
+              fi
+              target_major="${clean_ver%%.*}"
+              matrix_major="${MATRIX_VERSION%%/*}"
+              if [ "$(version_num "${target_major}")" -ne "$(version_num "${matrix_major}")" ]; then
+                echo "Skipping ${MATRIX_VERSION}/ for tag ${raw_tag}"
+                echo "build=false" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
             fi
           else
-            TAGS=("$REPO:${BITCOIN_VERSION/\//-}")
+            base_tag="${MATRIX_VERSION/\//-}"
+            tag_suffixes+=("${base_tag}")
 
-            if [ $(version ${BITCOIN_VERSION}) -ge $(version ${LATEST_BITCOIN_MAJOR_VERSION}) ]; then
-              echo "Version $(version ${BITCOIN_VERSION}) is greater than or equal to $(version ${LATEST_BITCOIN_MAJOR_VERSION}), tagging as latest"
-
-              if [[ ${BITCOIN_VERSION} != *"alpine"* ]]; then
-                TAGS+=("$REPO:latest")
+            matrix_major="${MATRIX_VERSION%%/*}"
+            if [ "$(version_num "${matrix_major}")" -ge "$(version_num "${latest_major}")" ]; then
+              if [[ "${MATRIX_VERSION}" != *"alpine"* ]]; then
+                tag_suffixes+=("latest")
               else
-                TAGS+=("$REPO:alpine")
+                tag_suffixes+=("alpine")
               fi
             fi
 
-            if [ $GITHUB_REF == "refs/heads/master" ]; then
-              PUSH=true
+            if [[ "${GITHUB_REF}" == "refs/heads/master" || "${GITHUB_REF}" == "refs/heads/main" ]]; then
+              push_enabled="true"
             fi
           fi
 
-          if [[ ${BITCOIN_VERSION} == "32/alpine" ]] || \
-             { [[ ${BITCOIN_VERSION} != *"alpine"* ]] && [ $(version ${BITCOIN_VERSION}) -ge $(version "0.19") ]; }; then
-            PLATFORMS="linux/amd64,linux/arm/v7,linux/arm64"
-          fi
+          {
+            echo "build=true"
+            echo "push=${push_enabled}"
+            echo "is_push_event=${is_push_event}"
+            echo "platforms=${platforms}"
+            echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            printf 'tag_suffixes=%s\n' "${tag_suffixes[*]}"
+            echo "ghcr_repo=${ghcr_repo}"
+            echo "repo_name=${repo_name}"
+          } >> "${GITHUB_OUTPUT}"
 
-          echo ::set-output name=build_date::$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          echo ::set-output name=docker_platforms::${PLATFORMS}
-          echo ::set-output name=docker_username::ruimarinho
-          echo ::set-output name=push::${PUSH}
-          echo ::set-output name=tags::${TAGS[@]}
-          echo ::set-output name=build::true
-
-      - if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true'
-        name: Login into Docker Hub
+      - name: Attempt login to GHCR
+        id: ghcr_login
+        if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true'
+        continue-on-error: true
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
-          username: ruimarinho
-          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - if: steps.prepare.outputs.build == 'true'
-        name: Build Docker image
+      - name: Warn if GHCR login failed
+        if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true' && steps.ghcr_login.outcome != 'success'
+        run: echo "::warning::Skipping ghcr.io push for ${{ matrix.version }} because login failed."
+
+      - name: Attempt login to Docker Hub
+        id: dockerhub_login
+        if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true'
+        continue-on-error: true
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Warn if Docker Hub login failed
+        if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true' && steps.dockerhub_login.outcome != 'success'
+        run: echo "::warning::Skipping Docker Hub push for ${{ matrix.version }} because DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is missing, expired, or invalid."
+
+      - name: Attempt login to quay.io
+        id: quay_login
+        if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true'
+        continue-on-error: true
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+
+      - name: Warn if quay.io login failed
+        if: steps.prepare.outputs.build == 'true' && steps.prepare.outputs.push == 'true' && steps.quay_login.outcome != 'success'
+        run: echo "::warning::Skipping quay.io push for ${{ matrix.version }} because QUAY_USERNAME or QUAY_TOKEN is missing, expired, or invalid."
+
+      - name: Assemble final image tags
+        id: final_tags
+        if: steps.prepare.outputs.build == 'true'
+        env:
+          PUSH_ENABLED: ${{ steps.prepare.outputs.push }}
+          GHCR_OK: ${{ steps.ghcr_login.outcome }}
+          DOCKERHUB_OK: ${{ steps.dockerhub_login.outcome }}
+          QUAY_OK: ${{ steps.quay_login.outcome }}
+          GHCR_REPO: ${{ steps.prepare.outputs.ghcr_repo }}
+          REPO_NAME: ${{ steps.prepare.outputs.repo_name }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          QUAY_NAMESPACE: ${{ secrets.QUAY_NAMESPACE }}
+          TAG_SUFFIXES: ${{ steps.prepare.outputs.tag_suffixes }}
         run: |
-          TAGS=(${{ steps.prepare.outputs.tags }})
+          set -euo pipefail
+
+          registries=()
+          if [[ "${PUSH_ENABLED}" != "true" ]]; then
+            # Dry-run build on PRs or non-default branches: format tags using GHCR namespace
+            registries+=("${GHCR_REPO}")
+          else
+            if [[ "${GHCR_OK}" == "success" ]]; then
+              registries+=("${GHCR_REPO}")
+            fi
+            if [[ "${DOCKERHUB_OK}" == "success" && -n "${DOCKERHUB_USERNAME}" ]]; then
+              registries+=("${DOCKERHUB_USERNAME,,}/${REPO_NAME}")
+            elif [[ "${DOCKERHUB_OK}" == "success" ]]; then
+              echo "::warning::Skipping Docker Hub tag because DOCKERHUB_USERNAME is empty."
+            fi
+            if [[ "${QUAY_OK}" == "success" && -n "${QUAY_NAMESPACE}" ]]; then
+              registries+=("quay.io/${QUAY_NAMESPACE,,}/${REPO_NAME}")
+            elif [[ "${QUAY_OK}" == "success" ]]; then
+              echo "::warning::Skipping quay.io tag because QUAY_NAMESPACE is empty."
+            fi
+          fi
+
+          full_tags=()
+          for reg in "${registries[@]}"; do
+            for sfx in ${TAG_SUFFIXES}; do
+              full_tags+=("${reg}:${sfx}")
+            done
+          done
+
+          if [[ "${PUSH_ENABLED}" == "true" && "${#full_tags[@]}" -eq 0 ]]; then
+            echo "::error::Push requested for ${{ matrix.version }}, but no registries authenticated successfully."
+            exit 1
+          fi
+
+          printf -v joined '%s,' "${full_tags[@]}"
+          echo "tags=${joined%,}" >> "${GITHUB_OUTPUT}"
+          echo "effective_push=${PUSH_ENABLED}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build Docker image
+        if: steps.prepare.outputs.build == 'true'
+        env:
+          RAW_TAGS: ${{ steps.final_tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          IFS=',' read -r -a tag_arr <<< "${RAW_TAGS}"
+          tag_args=()
+          for t in "${tag_arr[@]}"; do
+            [ -n "$t" ] && tag_args+=(--tag "$t")
+          done
 
           echo "Build date: ${{ steps.prepare.outputs.build_date }}"
-          echo "Docker platform: ${{ steps.prepare.outputs.docker_platforms }}"
-          echo "Push: ${{ steps.prepare.outputs.push }}"
-          echo "Tags: ${{ steps.prepare.outputs.tags }}"
+          echo "Docker platform: ${{ steps.prepare.outputs.platforms }}"
+          echo "Push: ${{ steps.final_tags.outputs.effective_push }}"
+          echo "Tags: ${RAW_TAGS}"
 
-          echo docker buildx build --platform ${{ steps.prepare.outputs.docker_platforms }} \
-            --output "type=image,push=${{steps.prepare.outputs.push}}" \
+          docker buildx build \
+            --platform "${{ steps.prepare.outputs.platforms }}" \
+            --output "type=image,push=${{ steps.final_tags.outputs.effective_push }}" \
             --progress=plain \
             --build-arg "BUILD_DATE=${{ steps.prepare.outputs.build_date }}" \
             --build-arg "VCS_REF=${GITHUB_SHA::8}" \
-            $(printf "%s" "${TAGS[@]/#/ --tag }" ) \
-            ${{ matrix.version }}/
-
-          docker buildx build --platform ${{ steps.prepare.outputs.docker_platforms }} \
-            --output "type=image,push=${{steps.prepare.outputs.push}}" \
-            --progress=plain \
-            --build-arg "BUILD_DATE=${{ steps.prepare.outputs.build_date }}" \
-            --build-arg "VCS_REF=${GITHUB_SHA::8}" \
-            $(printf "%s" "${TAGS[@]/#/ --tag }" ) \
-            ${{ matrix.version }}/
+            "${tag_args[@]}" \
+            "${{ matrix.version }}/"
