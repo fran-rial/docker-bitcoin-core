@@ -29,6 +29,8 @@ WORKDIR /build
 # Replace with space/newline-separated primary key fingerprints of trusted builders
 ENV TRUSTED_BUILDER_FPRS=""
 
+COPY verify-signatures.sh /usr/local/bin/verify-signatures
+
 RUN set -eu; \
   GNUPGHOME="$(mktemp -d)"; \
   export GNUPGHOME; \
@@ -39,24 +41,7 @@ RUN set -eu; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/SHA256SUMS.asc"; \
   curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}.tar.gz"; \
   gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS > SHA256SUMS.status; \
-  if grep -Eq '^\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYREVOKED|SIGEXPIRED)( |$)' SHA256SUMS.status; then \
-    echo "Rejected invalid or expired GPG signature status" >&2; \
-    exit 1; \
-  fi; \
-  valid_fprs="$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print toupper($12 ? $12 : $3) }' SHA256SUMS.status | sort -u)"; \
-  if [ -n "${TRUSTED_BUILDER_FPRS}" ]; then \
-    matched_count=0; \
-    for fpr in ${TRUSTED_BUILDER_FPRS}; do \
-      norm_fpr="$(printf '%s' "$fpr" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"; \
-      if printf '%s\n' "$valid_fprs" | grep -qx "$norm_fpr"; then \
-        matched_count=$((matched_count + 1)); \
-      fi; \
-    done; \
-    test "$matched_count" -ge 3; \
-  else \
-    valid_signers="$(printf '%s\n' "$valid_fprs" | sed '/^$/d' | wc -l)"; \
-    test "$valid_signers" -ge 5; \
-  fi; \
+  sh /usr/local/bin/verify-signatures SHA256SUMS.status; \
   grep -E "  bitcoin-${BITCOIN_VERSION}\.tar\.gz$" SHA256SUMS | sha256sum -c -; \
   tar -xzf "bitcoin-${BITCOIN_VERSION}.tar.gz"; \
   rm -rf "$GNUPGHOME" keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}" SHA256SUMS SHA256SUMS.asc SHA256SUMS.status "bitcoin-${BITCOIN_VERSION}.tar.gz"
@@ -91,20 +76,15 @@ ENV BITCOIN_DATA=/home/bitcoin/.bitcoin \
 
 RUN addgroup -g "${GID}" -S bitcoin \
   && adduser -u "${UID}" -S -G bitcoin bitcoin \
-  && apk add --no-cache libstdc++ sqlite-libs su-exec zeromq
+  && apk add --no-cache libstdc++ shadow sqlite-libs su-exec zeromq
 
 COPY --from=builder --chown=root:root "${BITCOIN_PREFIX}" "${BITCOIN_PREFIX}"
 COPY --chown=root:root docker-entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
 
-USER bitcoin
-RUN umask 077 && mkdir -p "${BITCOIN_DATA}"
-
 VOLUME ["${BITCOIN_DATA}"]
 EXPOSE 8332 8333 18332 18333 18443 18444 38332 38333
 ENTRYPOINT ["/entrypoint.sh"]
-
-WORKDIR ${BITCOIN_DATA}
 
 RUN bitcoind -version | grep -q "Bitcoin Core daemon version v${BITCOIN_VERSION}"
 

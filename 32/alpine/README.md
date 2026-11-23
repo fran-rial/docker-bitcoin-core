@@ -1,15 +1,16 @@
 # Bitcoin Core 32.1 Alpine candidate
 
 This is an unvalidated source-build candidate, not a published image.
-It defaults to UID 100 and GID 101 and starts as the non-root `bitcoin` user.
-The entrypoint does not change ownership or apply runtime UID/GID overrides;
-it does not change the permissions of existing data directories either.
-Mounted directories must be writable and searchable by the container user,
-and their host permissions and ACLs must restrict access appropriately.
-The entrypoint uses umask `077` for new files, but it does not fix existing
-permissions or host ACLs. Do not mount existing node or wallet data: runtime,
-wallet migration, rollback and Synology compatibility have not yet been
-verified.
+Like Alpine 28, the entrypoint starts as root and switches Bitcoin commands to
+the `bitcoin` user, defaulting to UID 100 and GID 101. Runtime `UID` and `GID`
+overrides modify that account. Do not override the container user: the
+entrypoint requires root for account and directory setup. For `bitcoind`,
+it applies umask `077`, sets the data directory to mode `0700`, and changes
+ownership of the home and data directories themselves, not their contents.
+Other commands run as root. Mount ACLs and existing files must still allow
+the `bitcoin` user access; permission changes can fail on DSM. Do not mount
+existing node or wallet data: runtime, wallet migration, rollback and
+Synology compatibility have not yet been verified.
 
 The source archive is checked against Bitcoin Core's signed SHA256SUMS using
 a pinned snapshot of the upstream builder keys. The signer-key provenance
@@ -32,11 +33,9 @@ The Dockerfile imports builder keys from a
 It requires a successful GPG verification, rejects signature-error statuses,
 and checks the source archive against the signed SHA256SUMS. With the default
 empty `TRUSTED_BUILDER_FPRS`, it requires at least five distinct primary
-`VALIDSIG` fingerprints. The alternative non-empty trusted-list branch is
-unsafe: repeated entries for one fingerprint can satisfy its three-signer
-threshold. Do not use that branch until it counts distinct trusted signers.
-The snapshot pin does not independently authenticate the builders or approve
-a signer trust policy.
+`VALIDSIG` fingerprints. A non-empty trusted list requires three distinct
+matching fingerprints; duplicates do not count twice. The snapshot pin does
+not independently authenticate the builders or approve a signer trust policy.
 
 For comparison, the [NixOS Bitcoin package](https://github.com/NixOS/nixpkgs/blob/master/pkgs/by-name/bi/bitcoin/package.nix)
 checks specific fingerprints and pins hashes of its inputs.
