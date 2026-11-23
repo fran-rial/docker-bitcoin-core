@@ -91,19 +91,19 @@ ENV BITCOIN_DATA=/home/bitcoin/.bitcoin \
 
 RUN addgroup -g "${GID}" -S bitcoin \
   && adduser -u "${UID}" -S -G bitcoin bitcoin \
-  && apk add --no-cache libstdc++ sqlite-libs su-exec zeromq \
-  && mkdir -p "${BITCOIN_DATA}" \
-  && chown -R bitcoin:bitcoin /home/bitcoin
+  && apk add --no-cache libstdc++ sqlite-libs su-exec zeromq
 
 COPY --from=builder --chown=root:root "${BITCOIN_PREFIX}" "${BITCOIN_PREFIX}"
 COPY --chown=root:root docker-entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
 
+USER bitcoin
+RUN umask 077 && mkdir -p "${BITCOIN_DATA}"
+
 VOLUME ["${BITCOIN_DATA}"]
 EXPOSE 8332 8333 18332 18333 18443 18444 38332 38333
 ENTRYPOINT ["/entrypoint.sh"]
 
-USER bitcoin
 WORKDIR ${BITCOIN_DATA}
 
 RUN bitcoind -version | grep -q "Bitcoin Core daemon version v${BITCOIN_VERSION}"

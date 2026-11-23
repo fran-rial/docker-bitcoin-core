@@ -3,11 +3,13 @@
 This is an unvalidated source-build candidate, not a published image.
 It defaults to UID 100 and GID 101 and starts as the non-root `bitcoin` user.
 The entrypoint does not change ownership or apply runtime UID/GID overrides;
-mounted data directories must already be accessible and owned by the user
-running the container so their permissions can be set to `0700`. Startup
-fails if the data directory cannot be created or its permissions cannot be
-set. Do not mount existing node or wallet data: build, runtime, wallet
-migration, rollback and Synology compatibility have not yet been verified.
+it does not change the permissions of existing data directories either.
+Mounted directories must be writable and searchable by the container user,
+and their host permissions and ACLs must restrict access appropriately.
+The entrypoint uses umask `077` for new files, but it does not fix existing
+permissions or host ACLs. Do not mount existing node or wallet data: runtime,
+wallet migration, rollback and Synology compatibility have not yet been
+verified.
 
 The source archive is checked against Bitcoin Core's signed SHA256SUMS using
 a pinned snapshot of the upstream builder keys. The signer-key provenance
@@ -16,10 +18,12 @@ and package repositories are not digest- or snapshot-pinned; reproducibility
 and dependency provenance also remain open.
 
 The build workflow requests `linux/amd64`, `linux/arm64` and `linux/arm/v7`
-builds of this candidate on pull requests only. These targets are not yet
-qualified: each requires a successful build and runtime tests. The workflow
-does not publish `32.1-alpine` or move the floating `alpine` tag; enabling
-releases requires the checks below and a separate review of the tag policy.
+builds of this candidate on pull requests, pushes to `master` or `main`,
+and matching tags. These targets are not yet qualified: each requires a
+successful build and runtime tests. Matching tags can publish the candidate;
+pushes to `master` or `main` can also move the floating `alpine` tag when
+registry authentication succeeds. Publication requires the checks below
+and a review of tag policy.
 
 ## Signature verification and comparison
 
