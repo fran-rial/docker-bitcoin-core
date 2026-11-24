@@ -29,7 +29,10 @@ if [ "${1:-}" = "bitcoind" ]; then
   fi
   chown bitcoin:bitcoin "${home_dir}"
   chown bitcoin:bitcoin "${BITCOIN_DATA}"
-  set -- "$@" -datadir="${BITCOIN_DATA}"
+  set -- "$@" \
+    -datadir="${BITCOIN_DATA}" \
+    -daemon=0 \
+    -printtoconsole
 fi
 
 case "${1:-}" in

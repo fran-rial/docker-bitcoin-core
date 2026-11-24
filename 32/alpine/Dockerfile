@@ -4,12 +4,14 @@ ARG ALPINE_VERSION=3.24.4
 ARG BITCOIN_VERSION=32.1
 ARG BITCOIN_PREFIX=/opt/bitcoin-32.1
 ARG GUIX_SIGS_COMMIT=93aacee89333de43a96e7d128baa84e737c41b0b
+ARG BUILD_JOBS=2
 
 FROM alpine:${ALPINE_VERSION} AS builder
 
 ARG BITCOIN_VERSION
 ARG BITCOIN_PREFIX
 ARG GUIX_SIGS_COMMIT
+ARG BUILD_JOBS
 
 RUN apk add --no-cache \
   boost-dev \
@@ -31,6 +33,7 @@ ENV TRUSTED_BUILDER_FPRS=""
 
 COPY verify-signatures.sh /usr/local/bin/verify-signatures
 
+# Keep the temporary GPG home in the builder to avoid racing agent socket cleanup.
 RUN set -eu; \
   GNUPGHOME="$(mktemp -d)"; \
   export GNUPGHOME; \
@@ -44,7 +47,7 @@ RUN set -eu; \
   sh /usr/local/bin/verify-signatures SHA256SUMS.status; \
   grep -E "  bitcoin-${BITCOIN_VERSION}\.tar\.gz$" SHA256SUMS | sha256sum -c -; \
   tar -xzf "bitcoin-${BITCOIN_VERSION}.tar.gz"; \
-  rm -rf "$GNUPGHOME" keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}" SHA256SUMS SHA256SUMS.asc SHA256SUMS.status "bitcoin-${BITCOIN_VERSION}.tar.gz"
+  rm -rf keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}" SHA256SUMS SHA256SUMS.asc SHA256SUMS.status "bitcoin-${BITCOIN_VERSION}.tar.gz"
 
 WORKDIR /build/bitcoin-${BITCOIN_VERSION}
 
@@ -58,7 +61,7 @@ RUN cmake -B build \
     -DENABLE_WALLET=ON \
     -DWITH_ZMQ=ON \
     -DINSTALL_MAN=OFF \
-  && cmake --build build --parallel "$(nproc)" \
+  && cmake --build build --parallel "${BUILD_JOBS}" \
   && cmake --install build \
   && rm -rf /build/bitcoin-${BITCOIN_VERSION}
 

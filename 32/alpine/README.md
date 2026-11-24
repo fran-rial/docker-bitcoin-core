@@ -7,9 +7,10 @@ overrides modify that account. Do not override the container user: the
 entrypoint requires root for account and directory setup. For `bitcoind`,
 it applies umask `077`, sets the data directory to mode `0700`, and changes
 ownership of the home and data directories themselves, not their contents.
-Other commands run as root. Mount ACLs and existing files must still allow
-the `bitcoin` user access; permission changes can fail on DSM. Do not mount
-existing node or wallet data: runtime, wallet migration, rollback and
+It forces `bitcoind` to stay in the foreground and print logs to the container
+console. Other commands run as root. Mount ACLs and existing files must still
+allow the `bitcoin` user access; permission changes can fail on DSM. Do not
+mount existing node or wallet data: runtime, wallet migration, rollback and
 Synology compatibility have not yet been verified.
 
 The source archive is checked against Bitcoin Core's signed SHA256SUMS using
@@ -57,6 +58,10 @@ docker run --rm --entrypoint bitcoind bitcoin-core:32.1-alpine-candidate -versio
 docker run --rm --entrypoint bitcoin-cli bitcoin-core:32.1-alpine-candidate -version
 docker run --rm --entrypoint bitcoin-tx bitcoin-core:32.1-alpine-candidate -version
 ```
+
+The source build defaults to two parallel compile jobs to limit memory use on
+NAS hardware. Override this with `--build-arg BUILD_JOBS=4` on a host with
+more available memory.
 
 These are only build and executable smoke checks. Before publication or live
 use, test signature failures, runtime dependencies, isolated regtest RPC,
