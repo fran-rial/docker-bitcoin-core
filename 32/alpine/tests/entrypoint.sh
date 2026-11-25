@@ -58,7 +58,7 @@ for data in "$tmp/existing" "$tmp/created"; do
   : > "$tmp/log"
   BITCOIN_DATA="$data" sh "$entrypoint" -regtest > "$tmp/stdout"
   test -d "$data"
-  printf '%s\n' "-regtest" "-datadir=$data" "-daemon=0" "-printtoconsole" "0077" | cmp - "$tmp/output"
+  printf '%s\n' "-regtest" "-datadir=$data" "-printtoconsole" "0077" | cmp - "$tmp/output"
   printf '%s\n' "chmod 700 $data" "chown -R bitcoin:bitcoin $tmp" "chown -R bitcoin:bitcoin $data" | cmp - "$tmp/log"
   printf '%s\n' \
     "$entrypoint: assuming uid:gid for bitcoin:bitcoin of $TEST_ID_UID:101" \

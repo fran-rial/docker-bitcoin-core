@@ -41,7 +41,6 @@ if [ "${1:-}" = "bitcoind" ]; then
 
   set -- "$@" \
     -datadir="${BITCOIN_DATA}" \
-    -daemon=0 \
     -printtoconsole
 fi
 
