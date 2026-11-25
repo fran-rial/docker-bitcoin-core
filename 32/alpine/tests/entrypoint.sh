@@ -3,7 +3,7 @@ set -eu
 
 entrypoint="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)/docker-entrypoint.sh"
 tmp="$(mktemp -d)"
-trap 'rm -f "$tmp/bin/bitcoind" "$tmp/bin/bitcoin-cli" "$tmp/bin/chmod" "$tmp/bin/chown" "$tmp/bin/getent" "$tmp/bin/id" "$tmp/bin/su-exec" "$tmp/bin/groupmod" "$tmp/bin/usermod" "$tmp/output" "$tmp/log"; rmdir "$tmp/existing" "$tmp/created" "$tmp/bin" "$tmp" 2>/dev/null || true' EXIT
+trap 'rm -f "$tmp/bin/bitcoind" "$tmp/bin/bitcoin-cli" "$tmp/bin/chmod" "$tmp/bin/chown" "$tmp/bin/getent" "$tmp/bin/id" "$tmp/bin/su-exec" "$tmp/bin/groupmod" "$tmp/bin/usermod" "$tmp/output" "$tmp/stdout" "$tmp/log"; rmdir "$tmp/existing" "$tmp/created" "$tmp/bin" "$tmp" 2>/dev/null || true' EXIT
 mkdir "$tmp/bin" "$tmp/existing"
 
 cat > "$tmp/bin/bitcoind" <<'EOF'
@@ -56,10 +56,19 @@ export PATH="$tmp/bin:$PATH" TEST_OUTPUT="$tmp/output" TEST_LOG="$tmp/log" TEST_
 
 for data in "$tmp/existing" "$tmp/created"; do
   : > "$tmp/log"
-  BITCOIN_DATA="$data" sh "$entrypoint" -regtest
+  BITCOIN_DATA="$data" sh "$entrypoint" -regtest > "$tmp/stdout"
   test -d "$data"
   printf '%s\n' "-regtest" "-datadir=$data" "-daemon=0" "-printtoconsole" "0077" | cmp - "$tmp/output"
-  printf '%s\n' "chmod 700 $data" "chown bitcoin:bitcoin $tmp" "chown bitcoin:bitcoin $data" | cmp - "$tmp/log"
+  printf '%s\n' "chmod 700 $data" "chown -R bitcoin:bitcoin $tmp" "chown -R bitcoin:bitcoin $data" | cmp - "$tmp/log"
+  printf '%s\n' \
+    "$entrypoint: assuming uid:gid for bitcoin:bitcoin of $TEST_ID_UID:101" \
+    "$entrypoint: assuming arguments for bitcoind" \
+    "$entrypoint: starting recursive ownership change for $tmp" \
+    "$entrypoint: finished recursive ownership change for $tmp" \
+    "$entrypoint: starting recursive ownership change for $data" \
+    "$entrypoint: finished recursive ownership change for $data" \
+    "$entrypoint: setting data directory to $data" \
+    "" | cmp - "$tmp/stdout"
 done
 
 : > "$tmp/log"
