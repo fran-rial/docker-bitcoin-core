@@ -47,7 +47,7 @@ RUN set -eu; \
   sh /usr/local/bin/verify-signatures SHA256SUMS.status; \
   grep -E "  bitcoin-${BITCOIN_VERSION}\.tar\.gz$" SHA256SUMS | sha256sum -c -; \
   tar -xzf "bitcoin-${BITCOIN_VERSION}.tar.gz"; \
-  rm -rf keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}" SHA256SUMS SHA256SUMS.asc SHA256SUMS.status "bitcoin-${BITCOIN_VERSION}.tar.gz"
+  rm -rf "$GNUPGHOME" keys.tar.gz "guix.sigs-${GUIX_SIGS_COMMIT}" SHA256SUMS SHA256SUMS.asc SHA256SUMS.status "bitcoin-${BITCOIN_VERSION}.tar.gz"
 
 WORKDIR /build/bitcoin-${BITCOIN_VERSION}
 
