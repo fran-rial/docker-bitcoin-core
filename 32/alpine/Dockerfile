@@ -5,6 +5,7 @@ ARG BITCOIN_VERSION=32.1
 ARG BITCOIN_PREFIX=/opt/bitcoin-32.1
 ARG GUIX_SIGS_COMMIT=93aacee89333de43a96e7d128baa84e737c41b0b
 ARG BUILD_JOBS=2
+ARG USE_DEV_URANDOM=0
 
 FROM alpine:${ALPINE_VERSION} AS builder
 
@@ -12,6 +13,7 @@ ARG BITCOIN_VERSION
 ARG BITCOIN_PREFIX
 ARG GUIX_SIGS_COMMIT
 ARG BUILD_JOBS
+ARG USE_DEV_URANDOM
 
 RUN apk add --no-cache \
   boost-dev \
@@ -51,7 +53,13 @@ RUN set -eu; \
 
 WORKDIR /build/bitcoin-${BITCOIN_VERSION}
 
-RUN cmake -B build \
+RUN set -eu; \
+  case "${USE_DEV_URANDOM}" in \
+    0) set -- ;; \
+    1) set -- -DHAVE_GETRANDOM=OFF ;; \
+    *) echo "USE_DEV_URANDOM must be 0 or 1" >&2; exit 1 ;; \
+  esac; \
+  cmake -B build "$@" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${BITCOIN_PREFIX}" \
     -DBUILD_GUI=OFF \

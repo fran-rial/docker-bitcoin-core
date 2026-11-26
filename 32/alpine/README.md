@@ -63,6 +63,39 @@ The source build defaults to two parallel compile jobs to limit memory use on
 NAS hardware. Override this with `--build-arg BUILD_JOBS=4` on a host with
 more available memory.
 
+### Older Synology kernels without `getrandom`
+
+Linux introduced `getrandom` in 3.17. A Synology host running kernel 3.10.108
+returned `ENOSYS` for this syscall during an isolated startup test, followed
+by Bitcoin aborting before console logging initialized. Bitcoin Core 32.1
+detects `getrandom` at compile time; it does not fall back at runtime when
+the host kernel lacks the syscall.
+
+For these hosts, opt into Bitcoin Core's existing `/dev/urandom` entropy
+path with `USE_DEV_URANDOM=1`. This sets CMake's `HAVE_GETRANDOM=OFF`; it
+does not disable OS entropy or introduce a custom random-number generator.
+The default `USE_DEV_URANDOM=0` leaves upstream detection unchanged.
+Keep the host's OS entropy pool initialized before using this compatibility
+build, especially for wallet operations. This workaround does not establish
+general support for older kernels.
+
+From the repository root on the DiskStation:
+
+```sh
+docker build --platform linux/amd64 --build-arg USE_DEV_URANDOM=1 \
+  -t bitcoin-core:32.1-alpine-synology 32/alpine
+docker run --rm bitcoin-core:32.1-alpine-synology \
+  -regtest -networkactive=0 -daemon=0 -nosettings -stopafterblockimport
+```
+
+The startup check uses disposable data without mounting the production
+directory and should exit successfully after initialization. Rebuilding
+does not replace an existing container: verify this check on the target NAS
+before recreating a container with the new image. The compatibility image
+has not yet been validated on that host.
+
+### Further qualification
+
 These are only build and executable smoke checks. Before publication or live
 use, test signature failures, runtime dependencies, isolated regtest RPC,
 block-filter scanning, persistence, shutdown, user IDs and synthetic wallet
