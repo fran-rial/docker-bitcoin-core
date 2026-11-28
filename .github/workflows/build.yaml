@@ -22,6 +22,7 @@ jobs:
         version:
           - "32"
           - "32/alpine"
+          - "32/alpine-synology"
           - "28"
           - "28/alpine"
           - "24"
@@ -43,6 +44,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Test Alpine variant metadata
+        if: matrix.version == '32/alpine'
+        run: bash 32/alpine/tests/workflow.sh
+
       - name: Prepare build metadata
         id: prepare
         env:
@@ -56,8 +61,15 @@ jobs:
             echo "$1" | awk -F. '{ printf("%d%03d%03d%03d\n", $1+0, $2+0, $3+0, $4+0); }'
           }
 
-          if [ ! -d "${MATRIX_VERSION}" ]; then
-            echo "Directory ${MATRIX_VERSION}/ does not exist; skipping."
+          build_context="${MATRIX_VERSION}"
+          use_dev_urandom="0"
+          if [[ "${MATRIX_VERSION}" == "32/alpine-synology" ]]; then
+            build_context="32/alpine"
+            use_dev_urandom="1"
+          fi
+
+          if [ ! -d "${build_context}" ]; then
+            echo "Directory ${build_context}/ does not exist; skipping."
             echo "build=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -72,7 +84,7 @@ jobs:
           [ -n "${latest_major}" ] || latest_major="32"
 
           platforms="linux/amd64"
-          if [[ "${MATRIX_VERSION}" == "32/alpine" ]] || \
+          if [[ "${MATRIX_VERSION}" == "32/alpine" || "${MATRIX_VERSION}" == "32/alpine-synology" ]] || \
              { [[ "${MATRIX_VERSION}" != *"alpine"* ]] && [ "$(version_num "${MATRIX_VERSION}")" -ge "$(version_num "0.19")" ]; }; then
             platforms="linux/amd64,linux/arm/v7,linux/arm64"
           fi
@@ -83,14 +95,40 @@ jobs:
             is_push_event="true"
           fi
 
-          repo_slug="${GITHUB_REPOSITORY,,}"
+          repo_slug="$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           repo_name="${repo_slug#*/}"
           ghcr_repo="ghcr.io/${repo_slug}"
 
           tag_suffixes=()
 
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          if [[ "${MATRIX_VERSION}" == "32/alpine-synology" ]]; then
+            bitcoin_version="$(awk -F= '/^ARG BITCOIN_VERSION=/ { print $2; exit }' "${build_context}/Dockerfile")"
+            if [[ ! "${bitcoin_version}" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+              echo "Invalid Bitcoin version in ${build_context}/Dockerfile" >&2
+              exit 1
+            fi
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              raw_tag="${GITHUB_REF#refs/tags/}"
+              if [[ "${raw_tag}" != "${bitcoin_version}" && "${raw_tag}" != "${bitcoin_version}-alpine" && "${raw_tag}" != "${bitcoin_version}-alpine-synology" ]]; then
+                echo "Skipping ${MATRIX_VERSION}/ for tag ${raw_tag}"
+                echo "build=false" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+              push_enabled="true"
+              tag_suffixes+=("${bitcoin_version}-alpine-synology")
+            else
+              tag_suffixes+=("32-alpine-synology")
+              if [[ "${GITHUB_REF}" == "refs/heads/master" || "${GITHUB_REF}" == "refs/heads/main" ]]; then
+                push_enabled="true"
+              fi
+            fi
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             raw_tag="${GITHUB_REF#refs/tags/}"
+            if [[ "${raw_tag}" == *-alpine-synology ]]; then
+              echo "Skipping ${MATRIX_VERSION}/ for Synology tag ${raw_tag}"
+              echo "build=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
             push_enabled="true"
 
             # Support both "<ver>-alpine" (e.g. "32.1-alpine") and "<ver>" (e.g. "32.1")
@@ -147,6 +185,8 @@ jobs:
             echo "push=${push_enabled}"
             echo "is_push_event=${is_push_event}"
             echo "platforms=${platforms}"
+            echo "build_context=${build_context}"
+            echo "use_dev_urandom=${use_dev_urandom}"
             echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             printf 'tag_suffixes=%s\n' "${tag_suffixes[*]}"
             echo "ghcr_repo=${ghcr_repo}"
@@ -250,11 +290,17 @@ jobs:
         if: steps.prepare.outputs.build == 'true'
         env:
           RAW_TAGS: ${{ steps.final_tags.outputs.tags }}
+          BUILD_CONTEXT: ${{ steps.prepare.outputs.build_context }}
+          USE_DEV_URANDOM: ${{ steps.prepare.outputs.use_dev_urandom }}
         run: |
           set -euo pipefail
 
           IFS=',' read -r -a tag_arr <<< "${RAW_TAGS}"
           tag_args=()
+          build_args=()
+          if [[ "${BUILD_CONTEXT}" == "32/alpine" ]]; then
+            build_args+=(--build-arg "USE_DEV_URANDOM=${USE_DEV_URANDOM}")
+          fi
           for t in "${tag_arr[@]}"; do
             [ -n "$t" ] && tag_args+=(--tag "$t")
           done
@@ -270,5 +316,6 @@ jobs:
             --progress=plain \
             --build-arg "BUILD_DATE=${{ steps.prepare.outputs.build_date }}" \
             --build-arg "VCS_REF=${GITHUB_SHA::8}" \
+            "${build_args[@]}" \
             "${tag_args[@]}" \
-            "${{ matrix.version }}/"
+            "${BUILD_CONTEXT}/"

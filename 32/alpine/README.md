@@ -1,17 +1,17 @@
-# Bitcoin Core 32.1 Alpine candidate
+# Bitcoin Core 32.1 Alpine candidates
 
-This is an unvalidated source-build candidate, not a published image.
+These are source-build candidates; publication depends on the build workflow.
 Like Alpine 28, the entrypoint starts as root and switches Bitcoin commands to
 the `bitcoin` user, defaulting to UID 100 and GID 101. Runtime `UID` and `GID`
 overrides modify that account. Do not override the container user: the
 entrypoint requires root for account and directory setup. For `bitcoind`,
 it applies umask `077`, sets the data directory to mode `0700`, and changes
-ownership of the home and data directories themselves, not their contents.
-It forces `bitcoind` to stay in the foreground and print logs to the container
-console. Other commands run as root. Mount ACLs and existing files must still
-allow the `bitcoin` user access; permission changes can fail on DSM. Do not
+ownership of the home and data directories recursively. It configures
+`bitcoind` to print logs to the container console. Other commands run as root.
+Mount ACLs and existing files must still allow the `bitcoin` user access;
+permission changes can fail on DSM. Do not
 mount existing node or wallet data: runtime, wallet migration, rollback and
-Synology compatibility have not yet been verified.
+production Synology compatibility have not yet been verified.
 
 The source archive is checked against Bitcoin Core's signed SHA256SUMS using
 a pinned snapshot of the upstream builder keys. The signer-key provenance
@@ -71,13 +71,18 @@ by Bitcoin aborting before console logging initialized. Bitcoin Core 32.1
 detects `getrandom` at compile time; it does not fall back at runtime when
 the host kernel lacks the syscall.
 
-For these hosts, opt into Bitcoin Core's existing `/dev/urandom` entropy
-path with `USE_DEV_URANDOM=1`. This sets CMake's `HAVE_GETRANDOM=OFF`; it
+The `32.1-alpine-synology` image is built from the same Dockerfile with
+`USE_DEV_URANDOM=1` by default. It uses Bitcoin Core's existing `/dev/urandom`
+entropy path. This sets CMake's `HAVE_GETRANDOM=OFF`; it
 does not disable OS entropy or introduce a custom random-number generator.
-The default `USE_DEV_URANDOM=0` leaves upstream detection unchanged.
-Keep the host's OS entropy pool initialized before using this compatibility
-build, especially for wallet operations. This workaround does not establish
-general support for older kernels.
+The standard Alpine image leaves upstream detection unchanged.
+
+Unlike `getrandom`, `/dev/urandom` can return data before the host's random
+pool is initialized during early boot. Weak randomness can compromise wallet
+keys. Verify that the host restores a securely saved random seed during boot
+before starting Bitcoin, especially for wallet operations; neither a fixed
+delay nor `entropy_avail` alone proves initialization. This workaround does
+not establish general support for older kernels.
 
 From the repository root on the DiskStation:
 
@@ -89,10 +94,19 @@ docker run --rm bitcoin-core:32.1-alpine-synology \
 ```
 
 The startup check uses disposable data without mounting the production
-directory and should exit successfully after initialization. Rebuilding
-does not replace an existing container: verify this check on the target NAS
-before recreating a container with the new image. The compatibility image
-has not yet been validated on that host.
+directory and should exit successfully after initialization. On one x86-64
+Synology host with kernel 3.10.108, this isolated startup and shutdown
+completed with exit code 0. Rebuilding does not replace an existing
+container: verify this check on the target NAS
+before recreating a container with the new image. This is not a production,
+wallet migration, or full compatibility qualification.
+
+CI builds the variant with `USE_DEV_URANDOM=1`; tags `32.1`,
+`32.1-alpine`, or `32.1-alpine-synology` publish it as
+`32.1-alpine-synology` when registry authentication succeeds. Main-branch
+pushes publish `32-alpine-synology`, not the floating `alpine` tag. The image
+uses the same architecture targets as the standard Alpine build, but only
+the x86-64 host above has had this isolated startup test.
 
 ### Further qualification
 
